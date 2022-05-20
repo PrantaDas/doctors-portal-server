@@ -26,6 +26,8 @@ async function run() {
 
         const bookingCollection = client.db('doctors_portal').collection('bookings');
 
+        const userCollection = client.db('doctors_portal').collection('users');
+
 
         app.get('/services', async (req, res) => {
             const query = {};
@@ -63,18 +65,24 @@ async function run() {
             res.send({ success: true, result });
         });
 
-        // app.get('/booking', async (req, res) => {
-        //     const query = {};
-        //     const bookings = bookingCollection.find(query);
-        //     const result = await bookings.toArray();
-        //     res.send(result);
-        // });
 
         app.get('/booking', async (req, res) => {
             const email = req.query.email;
             console.log(email);
             const appointment = await bookingCollection.find({ email: email }).toArray();
             res.send(appointment);
+        });
+
+        app.put('/user/:email', async (req, res) => {
+            const email = req.query.email;
+            const userInfo = req.body;
+            const filter = { email: email };
+            const options = { upsert: true };
+            const updatedDoc = {
+                $set: userInfo,
+            };
+            const result = await userCollection.updateOne(filter, updatedDoc, options);
+            res.send(result);
         });
     }
 
