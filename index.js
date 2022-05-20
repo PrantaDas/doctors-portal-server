@@ -4,6 +4,7 @@ const app = express();
 const cors = require('cors');
 const port = process.env.PORT || 5000;
 const jwt = require('jsonwebtoken');
+const query = require('express/lib/middleware/query');
 require('dotenv').config();
 
 
@@ -23,13 +24,58 @@ async function run() {
 
         const servicesCollection = client.db('doctors_portal').collection('services');
 
+        const bookingCollection = client.db('doctors_portal').collection('bookings');
+
 
         app.get('/services', async (req, res) => {
             const query = {};
             const cursor = servicesCollection.find(query);
             const result = await cursor.toArray();
             res.send(result);
-        })
+        });
+
+        app.get('/available', async (req, res) => {
+            const date = req.query.date;
+
+            const query = { date: date };
+            const services = await servicesCollection.find({}).toArray();
+            const bookings = await bookingCollection.find(query).toArray();
+
+            services.forEach(service => {
+                const serviceBooking = bookings.filter(b => b.treatment === service.name);
+                const booked = serviceBooking.map(s => s.slot);
+                const available = service.slots.filter(s => !booked.includes(s));
+                service.slots = available;
+            })
+
+
+            res.send(services);
+        });
+
+        app.post('/booking', async (req, res) => {
+            const info = req.body;
+            const query = { treatment: info.treatment, date: info.date, patientName: info.patientName };
+            const exist = await bookingCollection.findOne(query);
+            if (exist) {
+                return res.send({ success: false, info: exist })
+            };
+            const result = await bookingCollection.insertOne(info);
+            res.send({ success: true, result });
+        });
+
+        // app.get('/booking', async (req, res) => {
+        //     const query = {};
+        //     const bookings = bookingCollection.find(query);
+        //     const result = await bookings.toArray();
+        //     res.send(result);
+        // });
+
+        app.get('/booking', async (req, res) => {
+            const email = req.query.email;
+            console.log(email);
+            const appointment = await bookingCollection.find({ email: email }).toArray();
+            res.send(appointment);
+        });
     }
 
     finally {
