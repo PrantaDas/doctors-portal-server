@@ -1,5 +1,5 @@
 const express = require('express');
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const app = express();
 const cors = require('cors');
 const port = process.env.PORT || 5000;
@@ -8,6 +8,7 @@ const { urlencoded } = require('express');
 require('dotenv').config();
 const nodemailer = require('nodemailer');
 const sgTransport = require('nodemailer-sendgrid-transport');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 
 app.use(cors());
@@ -41,6 +42,8 @@ async function run() {
         const userCollection = client.db('doctors_portal').collection('users');
 
         const doctorCollection = client.db('doctors_portal').collection('doctors');
+
+        const paymentCollection = client.db('doctors_portal').collection('payments');
 
 
         function verifyJWT(req, res, next) {
@@ -82,6 +85,37 @@ async function run() {
                 html: `
                 <div>
                     <p>Hello ${patientName},your Appointment for ${treatment} on ${date} slot ${slot} is confirmed.You are requested to appear the hospital 30 mins before your appointment.Till then stay safe and take care.</p>
+
+                    <p>Best Regards</p>
+                    <p>Doctors Portal Suport team.</p>
+                    <p>See our loaction</p>
+                    <a href="https://doctors-portal-33f00.web.app/">Our Location</a>
+                </div>
+                `
+            };
+
+            emailClient.sendMail(confirmaionEmail, function (err, info) {
+                if (err) {
+                    console.log(err);
+                }
+                else {
+                    console.log('Message sent: ', + info.response);
+                }
+            });
+        };
+
+
+        function sendPaymentConfirmationEmail(info) {
+            const { author, treatment, date, email, slot,transactionId } = info;
+
+            const confirmaionEmail = {
+                from: process.env.EMAIL_SENDER,
+                to: email,
+                subject: `Payment completed for ${treatment} on ${date}`,
+                text: `Hello ${author},your payment for  ${treatment} on ${date} slot ${slot} is received with TRXID:${transactionId}.You are requested to appear the hospital 30 mins before your appointment.Till then stay safe and take care.`,
+                html: `
+                <div>
+                    <p>Hello ${author},your payment for ${treatment} on ${date} slot ${slot} is received with TRXID:${transactionId}.You are requested to appear the hospital 30 mins before your appointment.Till then stay safe and take care.</p>
 
                     <p>Best Regards</p>
                     <p>Doctors Portal Suport team.</p>
@@ -168,6 +202,34 @@ async function run() {
             }
         });
 
+        app.get('/booking/:id', verifyJWT, async (req, res) => {
+            const id = req.params.id;
+            const query = { _id: ObjectId(id) };
+            const result = await bookingCollection.findOne(query);
+            res.send(result);
+        });
+        
+        // store payment information
+        app.patch('/booking/:id',verifyJWT, async(req,res)=>{
+            const id=req.params.id;
+            const paymentInfo=req.body;
+            const filter={_id:ObjectId(id)};
+            const updatedDoc={
+                $set:{
+                    paid:true,
+                    transactionId:paymentInfo.transactionId
+                }
+            };
+            const updatedBooking=await bookingCollection.updateOne(filter,updatedDoc);
+            const paymentData=await paymentCollection.insertOne(paymentInfo);
+            sendPaymentConfirmationEmail(paymentInfo);
+            res.send(updatedBooking);
+        });
+
+        // payment collection
+
+
+
         app.put('/user/admin/:email', verifyJWT, async (req, res) => {
             const email = req.params.email;
             const requester = req.decoded.email;
@@ -209,7 +271,22 @@ async function run() {
         app.get('/user', verifyJWT, async (req, res) => {
             const users = await userCollection.find({}).toArray();
             res.send(users);
+        });
+
+        // payment api
+
+        app.post('/create-payment-intent', verifyJWT, async (req, res) => {
+            const service = req.body;
+            const pirce = service.price;
+            const ammount = pirce * 100;
+            const paymentIntent = await stripe.paymentIntents.create({
+                amount: ammount,
+                currency: 'usd',
+                payment_method_types: ['card']
+            });
+            res.send({ clientSecret: paymentIntent.client_secret, })
         })
+
     }
 
     finally {
