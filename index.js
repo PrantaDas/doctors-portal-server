@@ -6,6 +6,8 @@ const port = process.env.PORT || 5000;
 const jwt = require('jsonwebtoken');
 const { urlencoded } = require('express');
 require('dotenv').config();
+const nodemailer = require('nodemailer');
+const sgTransport = require('nodemailer-sendgrid-transport');
 
 
 app.use(cors());
@@ -14,6 +16,16 @@ app.use(express.json());
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.hlrbv.mongodb.net/?retryWrites=true&w=majority`;
 const client = new MongoClient(uri, { useNewUrlParser: true, useUnifiedTopology: true, serverApi: ServerApiVersion.v1 });
+
+
+const options = {
+    auth: {
+        api_key: process.env.EMAIL_SENDER_KEY
+    }
+}
+
+const emailClient = nodemailer.createTransport(sgTransport(options));
+
 
 
 async function run() {
@@ -28,9 +40,11 @@ async function run() {
 
         const userCollection = client.db('doctors_portal').collection('users');
 
+        const doctorCollection = client.db('doctors_portal').collection('doctors');
+
 
         function verifyJWT(req, res, next) {
-            console.log('abc');
+            // console.log('abc');
             const authHeader = req.headers.authorization;
             if (!authHeader) {
                 return res.status(401).send({ message: 'Unauthorized Access' });
@@ -46,10 +60,67 @@ async function run() {
 
         };
 
+        const verifyAdmin = async (req, res, next) => {
+            const requester = req.decoded.email;
+            const requsterAccount = await userCollection.findOne({ email: requester });
+            if (requsterAccount.role === 'admin') {
+                next();
+            }
+            else {
+                return res.status(403).send({ message: 'Forbidden Access' });
+            }
+        }
+
+        function sendAppointmentEmail(info) {
+            const { patientName, treatment, date, email, slot } = info;
+
+            const confirmaionEmail = {
+                from: process.env.EMAIL_SENDER,
+                to: email,
+                subject: `Appointment for ${treatment} on ${date}`,
+                text: `Hello ${patientName},your Appointment for ${treatment} on ${date} slot ${slot} is confirmed.You are requested to appear the hospital 30 mins before your appointment.Till then stay safe and take care.`,
+                html: `
+                <div>
+                    <p>Hello ${patientName},your Appointment for ${treatment} on ${date} slot ${slot} is confirmed.You are requested to appear the hospital 30 mins before your appointment.Till then stay safe and take care.</p>
+
+                    <p>Best Regards</p>
+                    <p>Doctors Portal Suport team.</p>
+                    <p>See our loaction</p>
+                    <a href="https://doctors-portal-33f00.web.app/">Our Location</a>
+                </div>
+                `
+            };
+
+            emailClient.sendMail(confirmaionEmail, function (err, info) {
+                if (err) {
+                    console.log(err);
+                }
+                else {
+                    console.log('Message sent: ', + info.response);
+                }
+            });
+        }
+
+        app.post('/doctors', verifyJWT, verifyAdmin, async (req, res) => {
+            const doctor = req.body;
+            const result = await doctorCollection.insertOne(doctor);
+            res.send(result);
+        });
+
+        app.get('/doctors', verifyJWT, verifyAdmin, async (req, res) => {
+            const result = await doctorCollection.find({}).toArray();
+            res.send(result);
+        });
+
+        app.delete('/doctors/:email', verifyJWT, verifyAdmin, async (req, res) => {
+            const email = req.params.email;
+            const result = await doctorCollection.deleteOne({ email: email });
+            res.send(result);
+        })
 
         app.get('/services', async (req, res) => {
             const query = {};
-            const cursor = servicesCollection.find(query);
+            const cursor = servicesCollection.find(query).project({ name: 1 });
             const result = await cursor.toArray();
             res.send(result);
         });
@@ -79,6 +150,8 @@ async function run() {
                 return res.send({ success: false, info: exist })
             };
             const result = await bookingCollection.insertOne(info);
+            console.log('sending email');
+            sendAppointmentEmail(info);
             res.send({ success: true, result });
         });
 
@@ -129,7 +202,7 @@ async function run() {
                 $set: userInfo,
             };
             const result = await userCollection.updateOne(filter, updatedDoc, options);
-            const token = jwt.sign({ email: email }, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h' })
+            const token = jwt.sign({ email: email }, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1d' })
             res.send({ result, token });
         });
 
